@@ -1,0 +1,8 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+twilio>=9.0
+anthropic>=0.40
+pyyaml>=6.0
+python-dotenv>=1.0
+tzdata>=2024.1
