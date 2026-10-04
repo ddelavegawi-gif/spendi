@@ -26,6 +26,9 @@ class Config:
         self.bot_name = data.get("bot_name", "Spendi")
         self.currency = str(data.get("currency", "MXN")).upper()
         self.tz = ZoneInfo(data.get("timezone", "America/Mexico_City"))
+        self.cycle_start_day = int(data.get("budget_cycle_start_day", 1))
+        if not 1 <= self.cycle_start_day <= 28:
+            raise ValueError("budget_cycle_start_day must be between 1 and 28")
         self.users = {normalize_phone(str(k)): v for k, v in data["users"].items()}
         self.people = list(dict.fromkeys(self.users.values()))
         self.categories: dict = data["categories"]
