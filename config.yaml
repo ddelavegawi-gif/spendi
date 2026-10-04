@@ -21,6 +21,10 @@ fx_rates:
   USD: 17.0
   EUR: 19.5
 
+# Categories you removed: their expenses are moved to the new one every time Spendi starts.
+renamed_categories:
+  Delivery Food: Groceries
+
 # Where anything that doesn't fit goes. It has no budget; its spending is just tracked.
 fallback_category: Other
 

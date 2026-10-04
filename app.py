@@ -25,6 +25,10 @@ from storage import Store  # noqa: E402
 cfg = Config(os.getenv("SPENDI_CONFIG", "config.yaml"))
 store = Store(os.getenv("SPENDI_DB", "spendi.db"))
 run_imports(cfg, store)  # loads any new file in imports/ (each one only once)
+for old, new in cfg.renamed_categories.items():
+    moved = store.recategorize(old, new)
+    if moved:
+        logging.getLogger("spendi").info("Moved %s expenses from %s to %s", moved, old, new)
 spendi = Spendi(cfg, store, Interpreter(cfg))
 
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")

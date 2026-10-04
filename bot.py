@@ -240,6 +240,12 @@ class Spendi:
             lines.append("")
         lines += goals
 
+        orphans = [] if only else self.store.spent_outside(list(self.cfg.categories), start.isoformat(), end.isoformat())
+        for o in orphans:
+            total_spent += o["total"]
+            lines += [f"❓ *{o['category']}* (no longer a category)\n{money(o['total'], True)} in {o['n']} expenses "
+                      "— not counted in any budget above", ""]
+
         if not only:
             total_left = total_budget - total_spent
             if total_left >= 0:

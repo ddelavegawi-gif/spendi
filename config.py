@@ -34,6 +34,10 @@ class Config:
         self.categories: dict = data["categories"]
         self.fallback_category = data.get("fallback_category", "Other")
         self.fx_rates = {k.upper(): float(v) for k, v in (data.get("fx_rates") or {}).items()}
+        self.renamed_categories = dict(data.get("renamed_categories") or {})
+        for old, new in self.renamed_categories.items():
+            if new not in self.categories or self.categories[new].get("scope") == "personal":
+                raise ValueError(f"renamed_categories: {old} → {new}: target must be a shared category")
         if self.fallback_category not in self.categories:
             raise ValueError(f"fallback_category '{self.fallback_category}' is not a category")
 

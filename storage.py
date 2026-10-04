@@ -128,6 +128,22 @@ class Store:
         self._write("UPDATE expenses SET category = ?, person = ?, amount = ? WHERE id = ?",
                     (category, person, amount, expense_id))
 
+    def recategorize(self, old: str, new: str) -> int:
+        """Move every expense from category `old` to `new` (safe to run repeatedly)."""
+        with self.lock:
+            cur = self.conn.execute("UPDATE expenses SET category = ?, person = '' WHERE category = ?", (new, old))
+            self.conn.execute("DELETE FROM budget_overrides WHERE category = ?", (old,))
+            self.conn.commit()
+            return cur.rowcount
+
+    def spent_outside(self, categories: list[str], start: str, end: str) -> list[sqlite3.Row]:
+        """Spending in categories that are not in the config (so it never silently disappears)."""
+        marks = ",".join("?" * len(categories))
+        return self._read(
+            f"""SELECT category, COUNT(*) AS n, SUM(amount) AS total FROM expenses
+                WHERE spent_on >= ? AND spent_on < ? AND category NOT IN ({marks})
+                GROUP BY category""", (start, end, *categories))
+
     # ── imports ───────────────────────────────────────────────
     def import_done(self, batch: str) -> bool:
         return bool(self._read("SELECT 1 FROM imports_done WHERE batch = ?", (batch,)))
