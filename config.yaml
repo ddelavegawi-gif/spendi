@@ -4,7 +4,11 @@
 
 bot_name: Spendi
 currency: MXN                      # all budgets are in this currency
-timezone: America/Mexico_City      # decides what "today", "this week", "this month" mean
+timezone: America/Mexico_City      # decides what "today", "this week", "this cycle" mean
+
+# Day of the month when each budget cycle starts (1–28).
+# 16 → cycles run 16 Aug – 15 Sep, 16 Sep – 15 Oct, ...  Use 1 for normal calendar months.
+budget_cycle_start_day: 16
 
 # WhatsApp numbers allowed to use Spendi (international format).
 # Messages from any other number are ignored.
@@ -26,15 +30,17 @@ fallback_category: Other
 # type: goal      → a target to reach (savings) instead of a limit to stay under
 # monthly         → monthly budget. Weekly budget = monthly × 12 ÷ 52
 # keywords        → merchant hints (help Claude, and power the offline fallback parser)
+# split_keywords  → (personal categories) things you share: split 50/50 between both personal budgets
 #
-# Monthly total: $90,000 spending + $10,000 savings = $100,000
+# Monthly total: $90,000 spending + $10,000 savings = $100,000 (+ Transportation once you set it)
 categories:
   Groceries:
     scope: shared
     emoji: "🛒"
     monthly: 20000
-    description: Supermarkets, food and household supplies for home
-    keywords: [whole foods, walmart, soriana, chedraui, costco, sams, heb, la comer, city market, superama, bodega aurrera, oxxo, 7-eleven, mercado, verduras, carniceria, panaderia]
+    description: Supermarkets, food and household supplies for home, pet food and pet supplies, Amazon household orders, car wash
+    keywords: [pet, mascota, petco, petsmart, tomlinson, car wash, autolavado, central market, sprouts, wheatsville, farmers market,
+               super, supermercado, groceries, despensa, whole foods, walmart, soriana, chedraui, costco, sams, heb, la comer, city market, superama, bodega aurrera, oxxo, 7-eleven, mercado, verduras, carniceria, panaderia]
 
   Personal Expenses:
     scope: personal
@@ -43,7 +49,11 @@ categories:
       Diego: 10000
       Romi: 10000
     description: Things one person buys mainly for themself — clothes, shoes, cosmetics, beauty, haircuts, sports gear, gym, personal gadgets and hobbies
-    keywords: [sephora, nike, adidas, zara, h&m, liverpool, palacio de hierro, sanborns, mac, ulta, barberia, salon, gym, smart fit]
+    keywords: [personal, personales, sephora, nike, adidas, puma, zara, h&m, bershka, pull&bear, mango, liverpool, palacio de hierro, sanborns, mac, ulta, barberia, salon, gym, smart fit,
+               shoes, zapatos, tenis, sneakers, clothes, ropa, shirt, camisa, pants, pantalon, dress, vestido, jacket, chamarra, bag, bolsa,
+               makeup, maquillaje, perfume, haircut, corte de pelo, nails, uñas, gimnasio, sauna]
+    split_keywords: [restaurant, restaurante, cafe, café, coffee, cafeteria, starbucks, bar, brunch, lunch, dinner, comida, cena, desayuno,
+                     tacos, sushi, pizza, chipotle, vending, ticketmaster, tickets, boletos, concierto, cine, cinemark]
 
   Rent & Utilities:
     scope: shared
@@ -57,7 +67,14 @@ categories:
     emoji: "🛵"
     monthly: 5000
     description: Food ordered for delivery through apps or by phone
-    keywords: [rappi, uber eats, didi food, delivery, a domicilio]
+    keywords: [rappi, uber eats, didi food, delivery, a domicilio, pedido]
+
+  Transportation:
+    scope: shared
+    emoji: "🚗"
+    monthly: 0            # no budget yet — set one from WhatsApp: "set transportation budget to 6000"
+    description: Gas, EV charging, Uber/Didi rides (not food delivery), parking, tolls, car maintenance
+    keywords: [uber, didi, taxi, gasolina, gas station, shell, pemex, exxon, chevron, tesla, charging, parking, estacionamiento, caseta, peaje, toll, metro]
 
   Savings:
     scope: shared
@@ -71,5 +88,5 @@ categories:
     scope: shared
     emoji: "📦"
     monthly: 0
-    description: Anything that doesn't fit another category (transport, restaurants, health, entertainment...)
+    description: Anything that doesn't fit another category (health, gifts, travel...)
     keywords: []

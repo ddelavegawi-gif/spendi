@@ -1,5 +1,4 @@
 """Spendi's brain: takes (phone, text) and returns the WhatsApp reply."""
-import calendar
 from datetime import date, datetime, timedelta
 
 from config import Config, normalize_phone
@@ -26,12 +25,28 @@ def bar(pct: float, width: int = 10) -> str:
     return "▓" * filled + "░" * (width - filled)
 
 
-def period_bounds(day: date, period: str) -> tuple[date, date]:
+def period_bounds(day: date, period: str, start_day: int = 1) -> tuple[date, date]:
+    """[start, end) of the week (Mon–Sun) or budget cycle containing `day`.
+
+    With start_day=16 the cycle containing 4 Oct is 16 Sep – 15 Oct (end = 16 Oct, exclusive).
+    """
     if period == "week":
         start = day - timedelta(days=day.weekday())  # Monday
         return start, start + timedelta(days=7)
-    start = day.replace(day=1)
-    return start, (start + timedelta(days=32)).replace(day=1)
+    if day.day >= start_day:
+        start = day.replace(day=start_day)
+    else:
+        start = (day.replace(day=1) - timedelta(days=1)).replace(day=start_day)
+    end = (start.replace(day=1) + timedelta(days=32)).replace(day=start_day)
+    return start, end
+
+
+def cycle_name(start: date, end: date, start_day: int) -> str:
+    """'October' for calendar months, otherwise '16 Sep – 15 Oct'."""
+    if start_day == 1:
+        return f"{start:%B}"
+    last = end - timedelta(days=1)
+    return f"{start.day} {start:%b} – {last.day} {last:%b}"
 
 
 class Spendi:
@@ -80,7 +95,10 @@ class Spendi:
                              "or *show budget*. Type *help* for more.")
         return prefix + handler(intent, sender, today, text)
 
-    # ── budgets ───────────────────────────────────────────────
+    # ── periods & budgets ─────────────────────────────────────
+    def bounds(self, day: date, period: str) -> tuple[date, date]:
+        return period_bounds(day, period, self.cfg.cycle_start_day)
+
     def monthly_budget(self, category: str, person: str) -> float:
         override = self.store.budget_override(category, person)
         return override if override is not None else self.cfg.default_monthly(category, person)
@@ -104,9 +122,14 @@ class Spendi:
                 continue
 
             category = self._valid_category(e.get("category")) or self.cfg.fallback_category
-            person = ""
+            # Personal category: whose budget(s)? Shared things are split 50/50 between both.
             if self.cfg.is_personal(category):
-                person = e.get("for_person") if e.get("for_person") in self.cfg.people else sender
+                if e.get("split"):
+                    people = list(self.cfg.people)
+                else:
+                    people = [e.get("for_person") if e.get("for_person") in self.cfg.people else sender]
+            else:
+                people = [""]
 
             currency = (e.get("currency") or self.cfg.currency).upper()
             if currency == self.cfg.currency:
@@ -127,37 +150,48 @@ class Spendi:
 
             merchant = (e.get("merchant") or "").strip() or None
             note = (e.get("note") or "").strip() or None
-            expense_id = self.store.add_expense(
-                created_at=datetime.now(self.cfg.tz).strftime("%Y-%m-%d %H:%M:%S"),
-                spent_on=spent_on.isoformat(), logged_by=sender, amount=converted,
-                category=category, person=person, merchant=merchant, note=note,
-                original_amount=amount if currency != self.cfg.currency else None,
-                original_currency=currency if currency != self.cfg.currency else None,
-                raw_text=raw,
-            )
+            shares = [round(converted / len(people), 2)] * len(people)
+            shares[-1] = round(converted - sum(shares[:-1]), 2)  # last share absorbs rounding
+            ids = []
+            for person, share in zip(people, shares):
+                ids.append(self.store.add_expense(
+                    created_at=datetime.now(self.cfg.tz).strftime("%Y-%m-%d %H:%M:%S"),
+                    spent_on=spent_on.isoformat(), logged_by=sender, amount=share,
+                    category=category, person=person, merchant=merchant,
+                    note=(note or "") + (" (split 50/50)" if len(people) > 1 else "") or None,
+                    original_amount=amount if currency != self.cfg.currency else None,
+                    original_currency=currency if currency != self.cfg.currency else None,
+                    raw_text=raw,
+                ))
 
             what = " · ".join(x for x in [merchant, note] if x)
             amount_txt = money(converted)
             if currency != self.cfg.currency:
                 amount_txt += f" ({amount:,.2f} {currency})"
+            id_txt = " + ".join(f"#{i}" for i in ids)
             verb = "Saved" if self.cfg.is_goal(category) else "Expense saved"
-            lines = [f"✅ {verb} under *{self.cfg.label(category, person)}*.",
-                     f"{amount_txt}" + (f" · {what}" if what else "") + f" · #{expense_id}"]
+            if len(people) > 1:
+                head = f"✅ {verb}, split 50/50 under *{category}* ({money(shares[0])} each)."
+            else:
+                head = f"✅ {verb} under *{self.cfg.label(category, people[0])}*."
+            lines = [head, f"{amount_txt}" + (f" · {what}" if what else "") + f" · {id_txt}"]
             if spent_on != today:
                 lines.append(f"📅 Dated {spent_on:%a %d %b}")
 
-            start, end = period_bounds(spent_on, "month")
-            budget = self.budget_for(category, person, "month")
-            spent = self.store.spent(category, person, start.isoformat(), end.isoformat())
-            if self.cfg.is_goal(category):
-                if budget > 0:
-                    lines.append(f"🎯 {money(spent, True)} saved of the {money(budget, True)} goal this month.")
-            elif budget > 0:
-                left = budget - spent
-                if left >= 0:
-                    lines.append(f"{money(left, True)} available out of {money(budget, True)} this month.")
-                else:
-                    lines.append(f"⚠️ {money(-left, True)} over the {money(budget, True)} monthly budget.")
+            start, end = self.bounds(spent_on, "month")
+            for person in people:
+                budget = self.budget_for(category, person, "month")
+                spent = self.store.spent(category, person, start.isoformat(), end.isoformat())
+                who = f"{person}: " if len(people) > 1 else ""
+                if self.cfg.is_goal(category):
+                    if budget > 0:
+                        lines.append(f"🎯 {money(spent, True)} saved of the {money(budget, True)} goal this cycle.")
+                elif budget > 0:
+                    left = budget - spent
+                    if left >= 0:
+                        lines.append(f"{who}{money(left, True)} available out of {money(budget, True)} this cycle.")
+                    else:
+                        lines.append(f"⚠️ {who}{money(-left, True)} over the {money(budget, True)} budget.")
             blocks.append("\n".join(lines))
 
         if not blocks:
@@ -167,11 +201,13 @@ class Spendi:
     def show_budget(self, intent: dict, sender: str, today: date, raw: str) -> str:
         period = intent.get("period") if intent.get("period") in ("week", "month") else "month"
         only = self._valid_category(intent.get("category"))
-        start, end = period_bounds(today, period)
+        start, end = self.bounds(today, period)
 
         if period == "month":
-            days = calendar.monthrange(today.year, today.month)[1]
-            header = f"📊 *{today:%B} budget* · day {today.day} of {days}"
+            days = (end - start).days
+            day_n = (today - start).days + 1
+            name = cycle_name(start, end, self.cfg.cycle_start_day)
+            header = f"📊 *Budget {name}* · day {day_n} of {days}"
         else:
             header = f"📊 *This week* · {start:%a %d %b} – {end - timedelta(days=1):%a %d %b}"
 
@@ -205,8 +241,13 @@ class Spendi:
         lines += goals
 
         if not only:
-            lines.append(f"💰 *Total spending:* {money(total_budget - total_spent, True)} available "
-                         f"out of {money(total_budget, True)}")
+            total_left = total_budget - total_spent
+            if total_left >= 0:
+                lines.append(f"💰 *Total spending:* {money(total_left, True)} available "
+                             f"out of {money(total_budget, True)}")
+            else:
+                lines.append(f"💰 *Total spending:* ⚠️ {money(-total_left, True)} over "
+                             f"the {money(total_budget, True)} total")
         if period == "week":
             lines.append("_Weekly budget = monthly × 12 ÷ 52_")
         return "\n".join(lines).strip()
@@ -214,9 +255,9 @@ class Spendi:
     def list_expenses(self, intent: dict, sender: str, today: date, raw: str) -> str:
         period = intent.get("period") if intent.get("period") in ("week", "month") else "month"
         only = self._valid_category(intent.get("category"))
-        start, end = period_bounds(today, period)
+        start, end = self.bounds(today, period)
         rows = self.store.list_expenses(start.isoformat(), end.isoformat(), only, limit=15)
-        scope = "this week" if period == "week" else f"in {today:%B}"
+        scope = "this week" if period == "week" else cycle_name(start, end, self.cfg.cycle_start_day)
         title = f"🧾 *Latest expenses {scope}*" + (f" · {only}" if only else "")
         if not rows:
             return f"{title}\nNothing logged yet."
@@ -288,9 +329,9 @@ class Spendi:
 
     def reset_period(self, intent: dict, sender: str, today: date, raw: str) -> str:
         period = intent.get("period") if intent.get("period") in ("week", "month") else "month"
-        start, end = period_bounds(today, period)
+        start, end = self.bounds(today, period)
         count, total = self.store.period_summary(start.isoformat(), end.isoformat())
-        name = "this week" if period == "week" else f"{today:%B}"
+        name = "this week" if period == "week" else f"the {cycle_name(start, end, self.cfg.cycle_start_day)} cycle"
         if count == 0:
             return f"There are no expenses in {name} to reset."
         expires = datetime.now(self.cfg.tz) + timedelta(minutes=CONFIRM_MINUTES)
@@ -334,9 +375,10 @@ class Spendi:
         cats = "\n".join(f"{self.cfg.emoji(c)} {c}" for c in self.cfg.categories)
         other = next((p for p in self.cfg.people if p != sender), sender)
         return (f"Hi {sender}! I'm {self.cfg.bot_name} 👋\n\n"
-                f"*Log an expense*\n• 100 mxn whole foods\n• 350 uber ayer\n• 200 sephora for {other}\n\n"
+                f"*Log an expense*\n• 100 mxn whole foods\n• 350 uber ayer\n• 200 sephora for {other}\n"
+                "• 900 sushi (restaurants & things for both are split 50/50)\n\n"
                 "*See budgets*\n• show budget\n• show weekly budget\n• how much is left in groceries?\n\n"
                 "*Fix & manage*\n• last expenses (shows #numbers)\n• undo (deletes your last expense)\n"
                 f"• delete #12\n• move #12 to Groceries / #12 was {other}'s\n• change #12 to 150\n"
-                "• set groceries budget to 12000\n• reset budget (wipes this month, asks first)\n\n"
+                "• set groceries budget to 12000\n• reset budget (wipes this cycle, asks first)\n\n"
                 f"*Categories*\n{cats}")

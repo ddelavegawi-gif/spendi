@@ -18,11 +18,14 @@ logging.basicConfig(level=logging.INFO)
 
 from bot import Spendi  # noqa: E402
 from config import Config  # noqa: E402
+from importer import run_imports  # noqa: E402
 from interpreter import Interpreter  # noqa: E402
 from storage import Store  # noqa: E402
 
 cfg = Config(os.getenv("SPENDI_CONFIG", "config.yaml"))
-spendi = Spendi(cfg, Store(os.getenv("SPENDI_DB", "spendi.db")), Interpreter(cfg))
+store = Store(os.getenv("SPENDI_DB", "spendi.db"))
+run_imports(cfg, store)  # loads any new file in imports/ (each one only once)
+spendi = Spendi(cfg, store, Interpreter(cfg))
 
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")

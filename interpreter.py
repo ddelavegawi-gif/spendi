@@ -40,6 +40,8 @@ def build_tool(cfg: Config) -> dict:
                             "for_person": {"type": "string", "enum": cfg.people,
                                            "description": "Only if the message explicitly assigns it to someone else"},
                             "date": {"type": "string", "description": "YYYY-MM-DD, only if not today"},
+                            "split": {"type": "boolean",
+                                      "description": "Personal category only: true to split 50/50 between both people"},
                         },
                         "required": ["amount", "category"],
                     },
@@ -66,8 +68,17 @@ def build_system_prompt(cfg: Config, sender: str, today: date) -> str:
         scope = "one budget per person" if c.get("scope") == "personal" else "shared"
         hints = ", ".join(c.get("keywords", [])[:15])
         cats.append(f"- {name} ({scope}): {c.get('description', '')}" + (f". Examples: {hints}" if hints else ""))
+    split_hints = []
+    for name, c in cfg.categories.items():
+        if c.get("split_keywords"):
+            split_hints.append(f"{name}: " + ", ".join(c["split_keywords"]))
+    split_rule = ("\n- Shared outings are split 50/50: restaurants, cafés, coffee, bars, vending machines, event tickets, "
+                  "and anything bought for both of them go to the personal category with split=true "
+                  f"(hints → {'; '.join(split_hints)}). Food delivery apps are NOT split; they go to Delivery Food."
+                  if split_hints else "")
     return f"""You are the message parser for {cfg.bot_name}, a WhatsApp expense tracker shared by a couple: {', '.join(cfg.people)}.
 This message was sent by {sender}. Today is {today:%A %Y-%m-%d}. Default currency: {cfg.currency}.
+Their budget "month" is a cycle starting on day {cfg.cycle_start_day} of each month; period "month" always means the current cycle.
 Users write in English or Spanish, often very briefly ("100 whole foods", "350 pesos uber ayer").
 
 Categories:
@@ -77,6 +88,7 @@ Rules:
 - An amount plus something bought → add_expense. One entry per distinct purchase.
 - Choose the single best category from the merchant and context. Use "{cfg.fallback_category}" only if nothing fits.
 - Personal categories are for things one person buys mainly for themself (clothes, beauty, sports gear...). Household items go to shared categories even when bought at a store like Liverpool.
+- Pet food/supplies and car washes go to Groceries.{split_rule}
 - for_person: set ONLY if the message explicitly says the expense belongs to someone else ("for Romi", "de Diego"). Otherwise omit it; the sender is assumed.
 - Currency: "pesos"/"mxn"/"$" = MXN; "dlls"/"dólares"/"usd" = USD.
 - date: set only if a different day is implied ("yesterday", "ayer", "el viernes"), as YYYY-MM-DD, never in the future.
@@ -201,11 +213,20 @@ def rule_based_parse(cfg: Config, text: str) -> dict:
             words.append(w)
     merchant = " ".join(words).strip().title() or None
     category = _find_category(cfg, text)
+    split = False
+    if not category:
+        low_text = text.lower()
+        for name, c in cfg.categories.items():
+            if any(re.search(rf"(?<!\w){re.escape(k.lower())}(?!\w)", low_text) for k in c.get("split_keywords", [])):
+                category, split = name, True
+                break
     if not category and named_person:
         # Naming a person with no other clue usually means it's their personal expense.
         category = next((c for c in cfg.categories if cfg.is_personal(c)), None)
     expense = {"amount": amount, "currency": currency, "merchant": merchant,
                "category": category or cfg.fallback_category}
+    if split and not named_person:
+        expense["split"] = True
     if named_person:
         expense["for_person"] = named_person
     return {"intent": "add_expense", "expenses": [expense]}

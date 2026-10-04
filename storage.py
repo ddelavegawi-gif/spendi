@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS deleted_expenses (
     deleted_by TEXT
 );
 
+-- Import files that already ran, so each one loads exactly once.
+CREATE TABLE IF NOT EXISTS imports_done (
+    batch   TEXT PRIMARY KEY,
+    done_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    count   INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS budget_overrides (
     category TEXT NOT NULL,
     person   TEXT NOT NULL DEFAULT '',
@@ -120,6 +127,36 @@ class Store:
     def update_expense(self, expense_id: int, *, category: str, person: str, amount: float) -> None:
         self._write("UPDATE expenses SET category = ?, person = ?, amount = ? WHERE id = ?",
                     (category, person, amount, expense_id))
+
+    # ── imports ───────────────────────────────────────────────
+    def import_done(self, batch: str) -> bool:
+        return bool(self._read("SELECT 1 FROM imports_done WHERE batch = ?", (batch,)))
+
+    def run_import(self, batch: str, rows: list[dict], clear_existing: bool, created_at: str) -> int:
+        """Insert all rows in one transaction; optionally archive everything logged before."""
+        cols = ("id, created_at, spent_on, logged_by, amount, original_amount, original_currency, "
+                "merchant, note, category, person, raw_text")
+        with self.lock:
+            try:
+                if clear_existing:
+                    self.conn.execute(
+                        f"INSERT INTO deleted_expenses ({cols}, deleted_by) "
+                        f"SELECT {cols}, ? FROM expenses", (f"import:{batch}",))
+                    self.conn.execute("DELETE FROM expenses")
+                for r in rows:
+                    self.conn.execute(
+                        """INSERT INTO expenses (created_at, spent_on, logged_by, amount, original_amount,
+                               original_currency, merchant, note, category, person, raw_text)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                        (created_at, r["spent_on"], r["logged_by"], r["amount"], r.get("original_amount"),
+                         r.get("original_currency"), r.get("merchant"), r.get("note"), r["category"],
+                         r.get("person", ""), f"import:{batch}"))
+                self.conn.execute("INSERT INTO imports_done (batch, count) VALUES (?, ?)", (batch, len(rows)))
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+        return len(rows)
 
     # ── budgets ───────────────────────────────────────────────
     def set_budget(self, category: str, person: str, monthly: float) -> None:
