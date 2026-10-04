@@ -71,7 +71,7 @@
   },
   {
    "spent_on": "2026-10-03",
-   "category": "Delivery Food",
+   "category": "Groceries",
    "logged_by": "Romi",
    "merchant": "Uber Eats",
    "original_amount": 62.91,
@@ -559,7 +559,7 @@
   },
   {
    "spent_on": "2026-09-25",
-   "category": "Delivery Food",
+   "category": "Groceries",
    "logged_by": "Diego",
    "merchant": "Uber Eats",
    "original_amount": 45.38,
@@ -1057,7 +1057,7 @@
   },
   {
    "spent_on": "2026-09-20",
-   "category": "Delivery Food",
+   "category": "Groceries",
    "logged_by": "Romi",
    "merchant": "Uber Eats",
    "original_amount": 98.07,
@@ -1129,7 +1129,7 @@
   },
   {
    "spent_on": "2026-09-19",
-   "category": "Delivery Food",
+   "category": "Groceries",
    "logged_by": "Romi",
    "merchant": "Uber Eats",
    "original_amount": 40.21,
@@ -1181,7 +1181,7 @@
   },
   {
    "spent_on": "2026-09-18",
-   "category": "Delivery Food",
+   "category": "Groceries",
    "logged_by": "Diego",
    "merchant": "Uber Eats",
    "original_amount": 28.78,
@@ -1191,7 +1191,7 @@
   },
   {
    "spent_on": "2026-09-18",
-   "category": "Delivery Food",
+   "category": "Groceries",
    "logged_by": "Romi",
    "merchant": "Uber Eats",
    "original_amount": 40.23,

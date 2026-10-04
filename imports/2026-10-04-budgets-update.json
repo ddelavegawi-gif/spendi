@@ -1,0 +1,7 @@
+{
+ "batch": "2026-10-04-remove-delivery-food",
+ "note": "Delivery Food category removed: its expenses move to Groceries. Budgets go back to config.yaml values.",
+ "recategorize": {"Delivery Food": "Groceries"},
+ "reset_budget_overrides": true,
+ "expenses": []
+}
