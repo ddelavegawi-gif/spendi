@@ -7,6 +7,9 @@ from interpreter import Interpreter
 from storage import Store
 
 WEEKS_PER_MONTH = 52 / 12
+CONFIRM_MINUTES = 5
+YES = {"yes", "y", "si", "sí", "ok", "confirm", "confirmo", "dale"}
+NO = {"no", "cancel", "cancelar", "nope"}
 
 
 def money(x: float, whole: bool = False) -> str:
@@ -34,6 +37,7 @@ def period_bounds(day: date, period: str) -> tuple[date, date]:
 class Spendi:
     def __init__(self, cfg: Config, store: Store, interpreter: Interpreter):
         self.cfg, self.store, self.interpreter = cfg, store, interpreter
+        self.pending: dict[str, tuple[dict, datetime]] = {}  # sender -> (action, expires)
 
     # ── entry point ───────────────────────────────────────────
     def handle(self, phone: str, text: str) -> str | None:
@@ -43,21 +47,38 @@ class Spendi:
         text = (text or "").strip()
         if not text:
             return self.help_text(sender)
-        today = datetime.now(self.cfg.tz).date()
+        now = datetime.now(self.cfg.tz)
+        today = now.date()
+
+        # A risky action (like a reset) is waiting for this person's YES.
+        prefix = ""
+        if sender in self.pending:
+            action, expires = self.pending.pop(sender)
+            answer = text.lower().strip(" .!¡")
+            if now <= expires and answer in YES:
+                return self.run_confirmed(action, sender)
+            if answer in NO or answer in YES:
+                return "👍 Cancelled. Nothing was deleted."
+            prefix = "_(Reset cancelled.)_\n\n"
+
         intent = self.interpreter.interpret(text, sender, today)
         handlers = {
             "add_expense": self.add_expenses,
             "show_budget": self.show_budget,
             "list_expenses": self.list_expenses,
             "delete_last": self.delete_last,
+            "delete_expense": self.delete_expense,
+            "edit_expense": self.edit_expense,
+            "reset_period": self.reset_period,
             "set_budget": self.set_budget,
+            "reset_budgets": self.reset_budgets,
             "help": lambda *_: self.help_text(sender),
         }
         handler = handlers.get(intent.get("intent"))
         if not handler:
-            return ("🤔 I didn't get that. Send an expense like *100 mxn whole foods*, "
-                    "or *show budget*. Type *help* for more.")
-        return handler(intent, sender, today, text)
+            return prefix + ("🤔 I didn't get that. Send an expense like *100 mxn whole foods*, "
+                             "or *show budget*. Type *help* for more.")
+        return prefix + handler(intent, sender, today, text)
 
     # ── budgets ───────────────────────────────────────────────
     def monthly_budget(self, category: str, person: str) -> float:
@@ -106,7 +127,7 @@ class Spendi:
 
             merchant = (e.get("merchant") or "").strip() or None
             note = (e.get("note") or "").strip() or None
-            self.store.add_expense(
+            expense_id = self.store.add_expense(
                 created_at=datetime.now(self.cfg.tz).strftime("%Y-%m-%d %H:%M:%S"),
                 spent_on=spent_on.isoformat(), logged_by=sender, amount=converted,
                 category=category, person=person, merchant=merchant, note=note,
@@ -121,7 +142,7 @@ class Spendi:
                 amount_txt += f" ({amount:,.2f} {currency})"
             verb = "Saved" if self.cfg.is_goal(category) else "Expense saved"
             lines = [f"✅ {verb} under *{self.cfg.label(category, person)}*.",
-                     f"{amount_txt}" + (f" · {what}" if what else "")]
+                     f"{amount_txt}" + (f" · {what}" if what else "") + f" · #{expense_id}"]
             if spent_on != today:
                 lines.append(f"📅 Dated {spent_on:%a %d %b}")
 
@@ -204,19 +225,94 @@ class Spendi:
             d = date.fromisoformat(r["spent_on"])
             label = self.cfg.label(r["category"], r["person"])
             what = r["merchant"] or r["note"] or "—"
-            lines.append(f"{d:%d %b} · {money(r['amount'])} · {what} · {label} _({r['logged_by']})_")
+            lines.append(f"#{r['id']} · {d:%d %b} · {money(r['amount'])} · {what} · {label} _({r['logged_by']})_")
         if len(rows) == 15:
             lines.append("_Showing the 15 most recent._")
+        lines.append("\n_To fix one: *delete #12* or *move #12 to Groceries*_")
         return "\n".join(lines)
 
     def delete_last(self, intent: dict, sender: str, today: date, raw: str) -> str:
         row = self.store.last_logged_by(sender)
         if not row:
             return "There's nothing of yours to delete."
-        self.store.delete_expense(row["id"])
+        self.store.delete_expense(row["id"], deleted_by=sender)
         what = row["merchant"] or row["note"] or ""
         return (f"🗑️ Deleted {money(row['amount'])}" + (f" · {what}" if what else "")
                 + f" from *{self.cfg.label(row['category'], row['person'])}*.")
+
+    def _describe(self, row) -> str:
+        what = row["merchant"] or row["note"] or ""
+        return f"#{row['id']} · {money(row['amount'])}" + (f" · {what}" if what else "")
+
+    def delete_expense(self, intent: dict, sender: str, today: date, raw: str) -> str:
+        row = self.store.get_expense(intent.get("expense_id") or 0)
+        if not row:
+            return "I can't find that expense number. Send *last expenses* to see the numbers."
+        self.store.delete_expense(row["id"], deleted_by=sender)
+        return f"🗑️ Deleted {self._describe(row)} from *{self.cfg.label(row['category'], row['person'])}*."
+
+    def edit_expense(self, intent: dict, sender: str, today: date, raw: str) -> str:
+        row = (self.store.get_expense(intent["expense_id"]) if intent.get("expense_id")
+               else self.store.last_logged_by(sender))
+        if not row:
+            return "I can't find that expense. Send *last expenses* to see the numbers."
+        category = self._valid_category(intent.get("category")) or row["category"]
+        person = ""
+        if self.cfg.is_personal(category):
+            wanted = intent.get("for_person")
+            if wanted in self.cfg.people:
+                person = wanted
+            elif row["person"]:
+                person = row["person"]
+            else:
+                person = row["logged_by"]
+        try:
+            amount = float(intent.get("amount") or row["amount"])
+        except (TypeError, ValueError):
+            amount = row["amount"]
+        if amount <= 0:
+            amount = row["amount"]
+        if (category, person, amount) == (row["category"], row["person"], row["amount"]):
+            return ("Tell me what to change, e.g. *move #12 to Groceries*, "
+                    "*#12 was personal*, or *change #12 to 150*.")
+        self.store.update_expense(row["id"], category=category, person=person, amount=amount)
+        old_label = self.cfg.label(row["category"], row["person"])
+        new_label = self.cfg.label(category, person)
+        changes = []
+        if new_label != old_label:
+            changes.append(f"{old_label} → *{new_label}*")
+        if amount != row["amount"]:
+            changes.append(f"{money(row['amount'])} → *{money(amount)}*")
+        what = row["merchant"] or row["note"] or ""
+        return f"✏️ Updated #{row['id']}" + (f" · {what}" if what else "") + "\n" + "\n".join(changes)
+
+    def reset_period(self, intent: dict, sender: str, today: date, raw: str) -> str:
+        period = intent.get("period") if intent.get("period") in ("week", "month") else "month"
+        start, end = period_bounds(today, period)
+        count, total = self.store.period_summary(start.isoformat(), end.isoformat())
+        name = "this week" if period == "week" else f"{today:%B}"
+        if count == 0:
+            return f"There are no expenses in {name} to reset."
+        expires = datetime.now(self.cfg.tz) + timedelta(minutes=CONFIRM_MINUTES)
+        self.pending[sender] = ({"type": "reset_period", "start": start.isoformat(),
+                                 "end": end.isoformat(), "name": name}, expires)
+        things = "the 1 expense" if count == 1 else f"all {count} expenses"
+        return (f"⚠️ This will delete *{things}* from {name} "
+                f"({money(total)} total, logged by both of you) and every budget goes back to full.\n\n"
+                f"Reply *YES* within {CONFIRM_MINUTES} minutes to confirm. Anything else cancels.")
+
+    def run_confirmed(self, action: dict, sender: str) -> str:
+        if action["type"] == "reset_period":
+            count, total = self.store.period_summary(action["start"], action["end"])
+            self.store.delete_period(action["start"], action["end"], deleted_by=sender)
+            things = "1 expense" if count == 1 else f"{count} expenses"
+            return (f"🧹 Done. Deleted {things} ({money(total)}) from {action['name']}. "
+                    "All budgets are back to full.")
+        return "Nothing to confirm."
+
+    def reset_budgets(self, intent: dict, sender: str, today: date, raw: str) -> str:
+        self.store.clear_budget_overrides()
+        return "↩️ All budgets are back to the amounts in your settings. Send *show budget* to see them."
 
     def set_budget(self, intent: dict, sender: str, today: date, raw: str) -> str:
         category = self._valid_category(intent.get("category"))
@@ -240,6 +336,7 @@ class Spendi:
         return (f"Hi {sender}! I'm {self.cfg.bot_name} 👋\n\n"
                 f"*Log an expense*\n• 100 mxn whole foods\n• 350 uber ayer\n• 200 sephora for {other}\n\n"
                 "*See budgets*\n• show budget\n• show weekly budget\n• how much is left in groceries?\n\n"
-                "*Other*\n• last expenses\n• undo (deletes your last expense)\n"
-                "• set groceries budget to 12000\n\n"
+                "*Fix & manage*\n• last expenses (shows #numbers)\n• undo (deletes your last expense)\n"
+                f"• delete #12\n• move #12 to Groceries / #12 was {other}'s\n• change #12 to 150\n"
+                "• set groceries budget to 12000\n• reset budget (wipes this month, asks first)\n\n"
                 f"*Categories*\n{cats}")

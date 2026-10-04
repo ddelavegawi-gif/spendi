@@ -13,7 +13,8 @@ from config import Config
 log = logging.getLogger("spendi.interpreter")
 
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"  # fast + cheap; plenty for this task
-INTENTS = ["add_expense", "show_budget", "list_expenses", "delete_last", "set_budget", "help", "unknown"]
+INTENTS = ["add_expense", "show_budget", "list_expenses", "delete_last", "delete_expense",
+           "edit_expense", "reset_period", "set_budget", "reset_budgets", "help", "unknown"]
 
 
 def build_tool(cfg: Config) -> dict:
@@ -44,12 +45,15 @@ def build_tool(cfg: Config) -> dict:
                     },
                 },
                 "period": {"type": "string", "enum": ["week", "month"],
-                           "description": "For show_budget / list_expenses"},
+                           "description": "For show_budget / list_expenses / reset_period"},
                 "category": {"type": "string", "enum": categories,
-                             "description": "For show_budget / list_expenses / set_budget, if one is named"},
+                             "description": "For show_budget / list_expenses / set_budget, or the NEW category for edit_expense"},
                 "for_person": {"type": "string", "enum": cfg.people,
-                               "description": "For set_budget on a personal category"},
-                "amount": {"type": "number", "description": "For set_budget: the new monthly budget"},
+                               "description": "For set_budget or edit_expense on a personal category"},
+                "amount": {"type": "number",
+                           "description": "For set_budget: the new monthly budget. For edit_expense: the corrected amount"},
+                "expense_id": {"type": "integer",
+                               "description": "For delete_expense / edit_expense: the #number of the expense. Omit for 'last'"},
             },
             "required": ["intent"],
         },
@@ -79,6 +83,10 @@ Rules:
 - Asking about budget/remaining money/how we're doing → show_budget (period "week" if they mention week/semana, else "month"; category if they ask about one).
 - Asking what was spent / list / history → list_expenses.
 - "undo", "delete last", "borra el último" → delete_last.
+- "delete #12", "borra el 12" → delete_expense with expense_id.
+- Fixing an expense ("move #12 to groceries", "last one was personal", "change #12 to 150", "eso era de Romi") → edit_expense with expense_id (omit for the sender's last expense) and only the fields that change.
+- Wiping all expenses of the current month or week ("reset budget", "reset month", "start over", "borra todo el mes") → reset_period (period "week" only if they say week/semana). Spendi will ask for confirmation.
+- Restoring the default budget amounts ("reset budgets to default") → reset_budgets.
 - Changing a budget ("set groceries budget to 12000") → set_budget with category and amount (for_person if personal).
 - Greetings or "what can you do" → help. Anything else → unknown.
 Always call record_intent."""
@@ -98,7 +106,9 @@ class Interpreter:
     def interpret(self, text: str, sender: str, today: date) -> dict:
         if self.client:
             try:
-                return self._ask_claude(text, sender, today)
+                result = self._ask_claude(text, sender, today)
+                log.info("Claude parsed: %s", result)
+                return result
             except Exception:
                 log.exception("Claude call failed; falling back to keyword parser")
         return rule_based_parse(self.cfg, text)
@@ -122,7 +132,7 @@ class Interpreter:
 AMOUNT_RE = re.compile(r"\$?\s*(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?")
 CURRENCY_WORDS = {"mxn": "MXN", "pesos": "MXN", "peso": "MXN", "usd": "USD", "dlls": "USD",
                   "dolares": "USD", "dólares": "USD", "dollars": "USD", "eur": "EUR", "euros": "EUR"}
-FILLER = {"in", "en", "at", "on", "for", "de", "a", "the", "el", "la", "spent", "gaste", "gasté", "$"}
+FILLER = {"in", "en", "at", "on", "for", "de", "a", "the", "el", "la", "para", "spent", "gaste", "gasté", "$"}
 
 
 def _find_category(cfg: Config, text: str) -> str | None:
@@ -140,6 +150,27 @@ def rule_based_parse(cfg: Config, text: str) -> dict:
 
     if re.search(r"\b(help|ayuda|hola|hi|hello)\b", low):
         return {"intent": "help"}
+    if re.search(r"\b(reset|resetea|reinicia|start over)\b", low):
+        if re.search(r"\b(default|defaults|original)\b", low):
+            return {"intent": "reset_budgets"}
+        return {"intent": "reset_period", "period": period}
+    m = re.search(r"#\s*(\d+)", low)
+    if m and re.search(r"\b(delete|borra|borrar|elimina|remove)\b", low):
+        return {"intent": "delete_expense", "expense_id": int(m.group(1))}
+    if re.search(r"\b(move|change|mueve|cambia|edit)\b", low):
+        edit = {"intent": "edit_expense", "expense_id": int(m.group(1)) if m else None}
+        target = low.split(" to ", 1)[-1] if " to " in low else low.split(" a ", 1)[-1]
+        cat = _find_category(cfg, target)
+        if cat:
+            edit["category"] = cat
+        for p in cfg.people:
+            if re.search(rf"\b{p.lower()}\b", target):
+                edit["for_person"] = p
+                edit.setdefault("category", next((c for c in cfg.categories if cfg.is_personal(c)), None))
+        num = re.search(r"\b(\d+(?:\.\d+)?)\s*$", target)
+        if num and not cat:
+            edit["amount"] = float(num.group(1))
+        return edit
     if re.search(r"\b(undo|delete|borra|borrar|elimina)\b", low):
         return {"intent": "delete_last"}
     m = re.search(r"set\s+(.+?)\s+budget\s+(?:to\s+)?\$?([\d,\.]+)", low)
@@ -157,15 +188,24 @@ def rule_based_parse(cfg: Config, text: str) -> dict:
     amount = float(m.group(1).replace(",", "") + ("." + m.group(2) if m.group(2) else ""))
     rest = (text[:m.start()] + " " + text[m.end():]).strip()
     currency = cfg.currency
+    people = {p.lower(): p for p in cfg.people}
+    named_person = None
     words = []
     for w in rest.split():
         lw = w.lower().strip(".,!")
         if lw in CURRENCY_WORDS:
             currency = CURRENCY_WORDS[lw]
+        elif lw in people:
+            named_person = people[lw]          # "shoes diego" / "for romi"
         elif lw not in FILLER:
             words.append(w)
     merchant = " ".join(words).strip().title() or None
-    return {"intent": "add_expense", "expenses": [{
-        "amount": amount, "currency": currency, "merchant": merchant,
-        "category": _find_category(cfg, text) or cfg.fallback_category,
-    }]}
+    category = _find_category(cfg, text)
+    if not category and named_person:
+        # Naming a person with no other clue usually means it's their personal expense.
+        category = next((c for c in cfg.categories if cfg.is_personal(c)), None)
+    expense = {"amount": amount, "currency": currency, "merchant": merchant,
+               "category": category or cfg.fallback_category}
+    if named_person:
+        expense["for_person"] = named_person
+    return {"intent": "add_expense", "expenses": [expense]}

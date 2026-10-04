@@ -19,6 +19,15 @@ CREATE TABLE IF NOT EXISTS expenses (
 );
 CREATE INDEX IF NOT EXISTS idx_expenses_spent_on ON expenses (spent_on);
 
+-- Nothing is ever destroyed: deleted/reset expenses are copied here first.
+CREATE TABLE IF NOT EXISTS deleted_expenses (
+    id INTEGER, created_at TEXT, spent_on TEXT, logged_by TEXT, amount REAL,
+    original_amount REAL, original_currency TEXT, merchant TEXT, note TEXT,
+    category TEXT, person TEXT, raw_text TEXT,
+    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    deleted_by TEXT
+);
+
 CREATE TABLE IF NOT EXISTS budget_overrides (
     category TEXT NOT NULL,
     person   TEXT NOT NULL DEFAULT '',
@@ -82,8 +91,35 @@ class Store:
         )
         return rows[0] if rows else None
 
-    def delete_expense(self, expense_id: int) -> None:
-        self._write("DELETE FROM expenses WHERE id = ?", (expense_id,))
+    def get_expense(self, expense_id: int) -> sqlite3.Row | None:
+        rows = self._read("SELECT * FROM expenses WHERE id = ?", (expense_id,))
+        return rows[0] if rows else None
+
+    def _archive_and_delete(self, where: str, params, deleted_by: str) -> None:
+        cols = ("id, created_at, spent_on, logged_by, amount, original_amount, original_currency, "
+                "merchant, note, category, person, raw_text")
+        with self.lock:
+            self.conn.execute(
+                f"INSERT INTO deleted_expenses ({cols}, deleted_by) "
+                f"SELECT {cols}, ? FROM expenses WHERE {where}", (deleted_by, *params))
+            self.conn.execute(f"DELETE FROM expenses WHERE {where}", params)
+            self.conn.commit()
+
+    def delete_expense(self, expense_id: int, deleted_by: str = "") -> None:
+        self._archive_and_delete("id = ?", (expense_id,), deleted_by)
+
+    def period_summary(self, start: str, end: str) -> tuple[int, float]:
+        rows = self._read(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total FROM expenses "
+            "WHERE spent_on >= ? AND spent_on < ?", (start, end))
+        return int(rows[0]["n"]), float(rows[0]["total"])
+
+    def delete_period(self, start: str, end: str, deleted_by: str = "") -> None:
+        self._archive_and_delete("spent_on >= ? AND spent_on < ?", (start, end), deleted_by)
+
+    def update_expense(self, expense_id: int, *, category: str, person: str, amount: float) -> None:
+        self._write("UPDATE expenses SET category = ?, person = ?, amount = ? WHERE id = ?",
+                    (category, person, amount, expense_id))
 
     # ── budgets ───────────────────────────────────────────────
     def set_budget(self, category: str, person: str, monthly: float) -> None:
@@ -92,6 +128,9 @@ class Store:
                ON CONFLICT(category, person) DO UPDATE SET monthly = excluded.monthly""",
             (category, person, monthly),
         )
+
+    def clear_budget_overrides(self) -> None:
+        self._write("DELETE FROM budget_overrides")
 
     def budget_override(self, category: str, person: str) -> float | None:
         rows = self._read(
