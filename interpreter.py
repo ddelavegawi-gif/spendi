@@ -74,7 +74,7 @@ def build_system_prompt(cfg: Config, sender: str, today: date) -> str:
             split_hints.append(f"{name}: " + ", ".join(c["split_keywords"]))
     split_rule = ("\n- Shared outings are split 50/50: restaurants, cafés, coffee, bars, vending machines, event tickets, "
                   "and anything bought for both of them go to the personal category with split=true "
-                  f"(hints → {'; '.join(split_hints)}). Food delivery apps are NOT split; they go to Delivery Food."
+                  f"(hints → {'; '.join(split_hints)}). Food delivery apps (Uber Eats, Rappi...) are NOT split; they go to Groceries."
                   if split_hints else "")
     return f"""You are the message parser for {cfg.bot_name}, a WhatsApp expense tracker shared by a couple: {', '.join(cfg.people)}.
 This message was sent by {sender}. Today is {today:%A %Y-%m-%d}. Default currency: {cfg.currency}.
@@ -88,7 +88,7 @@ Rules:
 - An amount plus something bought → add_expense. One entry per distinct purchase.
 - Choose the single best category from the merchant and context. Use "{cfg.fallback_category}" only if nothing fits.
 - Personal categories are for things one person buys mainly for themself (clothes, beauty, sports gear...). Household items go to shared categories even when bought at a store like Liverpool.
-- Pet food/supplies and car washes go to Groceries.{split_rule}
+- Food delivery apps, pet food/supplies and car washes go to Groceries.{split_rule}
 - for_person: set ONLY if the message explicitly says the expense belongs to someone else ("for Romi", "de Diego"). Otherwise omit it; the sender is assumed.
 - Currency: "pesos"/"mxn"/"$" = MXN; "dlls"/"dólares"/"usd" = USD.
 - date: set only if a different day is implied ("yesterday", "ayer", "el viernes"), as YYYY-MM-DD, never in the future.

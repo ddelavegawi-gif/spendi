@@ -132,8 +132,9 @@ class Store:
     def import_done(self, batch: str) -> bool:
         return bool(self._read("SELECT 1 FROM imports_done WHERE batch = ?", (batch,)))
 
-    def run_import(self, batch: str, rows: list[dict], clear_existing: bool, created_at: str) -> int:
-        """Insert all rows in one transaction; optionally archive everything logged before."""
+    def run_import(self, batch: str, rows: list[dict], clear_existing: bool, created_at: str,
+                   recategorize: dict | None = None, reset_budget_overrides: bool = False) -> int:
+        """One transaction: optional cleanup/renames first, then insert the rows."""
         cols = ("id, created_at, spent_on, logged_by, amount, original_amount, original_currency, "
                 "merchant, note, category, person, raw_text")
         with self.lock:
@@ -143,6 +144,11 @@ class Store:
                         f"INSERT INTO deleted_expenses ({cols}, deleted_by) "
                         f"SELECT {cols}, ? FROM expenses", (f"import:{batch}",))
                     self.conn.execute("DELETE FROM expenses")
+                for old, new in (recategorize or {}).items():
+                    self.conn.execute("UPDATE expenses SET category = ?, person = '' WHERE category = ?", (new, old))
+                    self.conn.execute("DELETE FROM budget_overrides WHERE category = ?", (old,))
+                if reset_budget_overrides:
+                    self.conn.execute("DELETE FROM budget_overrides")
                 for r in rows:
                     self.conn.execute(
                         """INSERT INTO expenses (created_at, spent_on, logged_by, amount, original_amount,

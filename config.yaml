@@ -32,14 +32,14 @@ fallback_category: Other
 # keywords        → merchant hints (help Claude, and power the offline fallback parser)
 # split_keywords  → (personal categories) things you share: split 50/50 between both personal budgets
 #
-# Monthly total: $90,000 spending + $10,000 savings = $100,000 (+ Transportation once you set it)
+# Monthly total: $90,000 spending (20k groceries + 45k rent + 5k transport + 2×10k personal) + $10,000 savings
 categories:
   Groceries:
     scope: shared
     emoji: "🛒"
     monthly: 20000
-    description: Supermarkets, food and household supplies for home, pet food and pet supplies, Amazon household orders, car wash
-    keywords: [pet, mascota, petco, petsmart, tomlinson, car wash, autolavado, central market, sprouts, wheatsville, farmers market,
+    description: Supermarkets, food and household supplies for home, food delivery apps (Uber Eats, Rappi), pet food and pet supplies, Amazon household orders, car wash
+    keywords: [uber eats, rappi, didi food, delivery, a domicilio, pet, mascota, petco, petsmart, tomlinson, car wash, autolavado, central market, sprouts, wheatsville, farmers market,
                super, supermercado, groceries, despensa, whole foods, walmart, soriana, chedraui, costco, sams, heb, la comer, city market, superama, bodega aurrera, oxxo, 7-eleven, mercado, verduras, carniceria, panaderia]
 
   Personal Expenses:
@@ -62,17 +62,11 @@ categories:
     description: Rent, electricity, water, gas, internet, phone plans, building maintenance fees
     keywords: [renta, rent, cfe, luz, agua, gas natural, naturgy, telmex, izzi, totalplay, megacable, telcel, at&t, mantenimiento]
 
-  Delivery Food:
-    scope: shared
-    emoji: "🛵"
-    monthly: 5000
-    description: Food ordered for delivery through apps or by phone
-    keywords: [rappi, uber eats, didi food, delivery, a domicilio, pedido]
 
   Transportation:
     scope: shared
     emoji: "🚗"
-    monthly: 0            # no budget yet — set one from WhatsApp: "set transportation budget to 6000"
+    monthly: 5000
     description: Gas, EV charging, Uber/Didi rides (not food delivery), parking, tolls, car maintenance
     keywords: [uber, didi, taxi, gasolina, gas station, shell, pemex, exxon, chevron, tesla, charging, parking, estacionamiento, caseta, peaje, toll, metro]
 

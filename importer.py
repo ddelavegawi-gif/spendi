@@ -4,6 +4,8 @@ File format:
 {
   "batch": "amex-2026-09-16",          # unique name; a batch never loads twice
   "clear_existing": false,             # true = archive every expense logged before this import
+  "recategorize": {"Old": "New"},      # optional: move existing expenses between categories
+  "reset_budget_overrides": false,     # optional: forget budgets changed by WhatsApp, use config.yaml
   "expenses": [
     {"spent_on": "2026-09-20", "amount": 2727.06, "category": "Groceries", "person": "",
      "logged_by": "Diego", "merchant": "H-E-B", "note": "..."}
@@ -31,9 +33,16 @@ def run_imports(cfg: Config, store: Store, folder: str = "imports") -> None:
             batch = data["batch"]
             if store.import_done(batch):
                 continue
-            rows = [_validate(cfg, e, i) for i, e in enumerate(data["expenses"])]
+            rows = [_validate(cfg, e, i) for i, e in enumerate(data.get("expenses", []))]
+            recategorize = data.get("recategorize") or {}
+            for old, new in recategorize.items():
+                if new not in cfg.categories or cfg.is_personal(new):
+                    raise ValueError(f"recategorize target {new!r} must be a shared category in config.yaml")
             n = store.run_import(batch, rows, bool(data.get("clear_existing")),
-                                 datetime.now(cfg.tz).strftime("%Y-%m-%d %H:%M:%S"))
+                                 datetime.now(cfg.tz).strftime("%Y-%m-%d %H:%M:%S"),
+                                 recategorize, bool(data.get("reset_budget_overrides")))
+            if recategorize:
+                log.info("Moved expenses %s (batch %s)", recategorize, batch)
             log.info("Imported %s expenses from %s (batch %s)", n, file.name, batch)
         except Exception:
             log.exception("Import %s failed — nothing from it was saved", file.name)
